@@ -11,11 +11,15 @@ if not os.path.exists('src'):
 
 # Download gl3.h
 if not os.path.exists('include/GL3/gl3.h'):
+    print 'Downloading gl3.h to include/GL3...'
     web = urllib2.urlopen('http://www.opengl.org/registry/api/gl3.h')
     with open('include/GL3/gl3.h', 'wb') as f:
         f.writelines(web.readlines())
+else:
+    print 'Reusing gl3.h from include/GL3...'
 
 # Parse function names from gl3.h
+print 'Parsing gl3.h header...'
 procs = []
 p = re.compile(r'GLAPI.*APIENTRY\s+(\w+)')
 with open('include/GL3/gl3.h', 'r') as f:
@@ -30,6 +34,7 @@ def proc_t(proc):
              'p_t': 'PFN' + proc.upper() + 'PROC' }
 
 # Generate gl3w.h
+print 'Generating gl3w.h in include/GL3...'
 with open('include/GL3/gl3w.h', 'wb') as f:
     f.write(r'''#ifndef __gl3w_h_
 #define __gl3w_h_
@@ -65,6 +70,7 @@ void *gl3wGetProcAddress(const char *proc);
 ''')
 
 # Generate gl3w.c
+print 'Generating gl3w.c in src...'
 with open('src/gl3w.c', 'wb') as f:
     f.write(r'''#include <GL3/gl3w.h>
 
@@ -91,6 +97,38 @@ static void *get_proc(const char *proc)
 	res = wglGetProcAddress(proc);
 	if (!res)
 		res = GetProcAddress(libgl, proc);
+	return res;
+}
+#elif defined(__APPLE__) || defined(__APPLE_CC__)
+#include <Carbon/Carbon.h>
+
+CFBundleRef bundle;
+CFURLRef bundleURL;
+
+static void open_libgl(void)
+{
+	bundleURL = CFURLCreateWithFileSystemPath(kCFAllocatorDefault,
+		CFSTR("/System/Library/Frameworks/OpenGL.framework"),
+		kCFURLPOSIXPathStyle, true);
+
+	bundle = CFBundleCreate(kCFAllocatorDefault, bundleURL);
+	assert(bundle != NULL);
+}
+
+static void close_libgl(void)
+{
+	CFRelease(bundle);
+	CFRelease(bundleURL);
+}
+
+static void *get_proc(const char *proc)
+{
+	void *res;
+
+	CFStringRef procname = CFStringCreateWithCString(kCFAllocatorDefault, proc,
+		kCFStringEncodingASCII);
+	res = CFBundleGetFunctionPointerForName(bundle, procname);
+	CFRelease(procname);
 	return res;
 }
 #else
@@ -126,22 +164,14 @@ static struct {
 
 static int parse_version(void)
 {
-	const char *p;
-	int major, minor;
+	if (!glGetIntegerv)
+		return -1;
 
-	if (!glGetString)
+	glGetIntegerv(GL_MAJOR_VERSION, &version.major);
+	glGetIntegerv(GL_MINOR_VERSION, &version.minor);
+
+	if (version.major < 3)
 		return -1;
-	p = (const char *) glGetString(GL_VERSION);
-	if (!p)
-		return -1;
-	for (major = 0; *p >= '0' && *p <= '9'; p++)
-		major = 10 * major + *p - '0';
-	for (minor = 0, p++; *p >= '0' && *p <= '9'; p++)
-		minor = 10 * minor + *p - '0';
-	if (major < 3)
-		return -1;
-	version.major = major;
-	version.minor = minor;
 	return 0;
 }
 
